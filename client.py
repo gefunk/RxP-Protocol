@@ -1,9 +1,9 @@
 from protocol import RxP
 import logging
 
-class Server:
+class Client:
     def __init__(self, loglevel=logging.DEBUG):
-        self.logger = logging.getLogger("RxPConnection")
+        self.logger = logging.getLogger("Client")
         self.loglevel = loglevel
         # create console handler and set level to debug
         self.logger.setLevel(loglevel)
@@ -17,15 +17,13 @@ class Server:
         # add ch to logger
         self.logger.addHandler(ch)
     
-    def start(self):
+    def connect(self):
         socket = RxP()
-        socket.listen("127.0.0.1", 52001)
-        while True:
-            connection = socket.accept()
-            # send the connection of to a process handler here
-    
+        conn = socket.connect("127.0.0.1", 52000, "127.0.0.1", 52001)
+        self.logger.debug("Connection Established, %s" % conn)
+        return conn
 
 
 
-server = Server()
-server.start()
+client = Client()
+conn = client.connect()

@@ -1,4 +1,6 @@
-from enum import Enum
+from enum import Enum, unique
+import pickle
+import hashlib
 
 @unique
 class RxPFlags(Enum):
@@ -8,7 +10,7 @@ class RxPFlags(Enum):
 
 
 class RxPacket:
-    def __init__(self, flags, sequence, ack=None, data=None, sourceip=None, destintationip=None, sourceport=None, destport=None, checksum=None):
+    def __init__(self, flags, sequence, ack=None, data=None, sourceip=None, destinationip=None, sourceport=None, destport=None, checksum=None):
         '''List of packet flags, describing the type of packet'''
         self.flags = flags
         '''Sequence Numbers'''
@@ -27,24 +29,43 @@ class RxPacket:
         self.destport = destport
         '''Checksum'''
         self.checksum = checksum
-        
-    '''Convert udp datagram to rxp packet'''
-    @classmethod
-    def from_udp_to_packet(cls, udppacket):
-        return cls(
-            udppacket.flags,
-            udppacket.sequence, 
-            udppacket.ack, 
-            udppacket.data, 
-            udppacket.sourceip, 
-            updpacket.destinationip,
-            udppacket.sourceport,
-            udppacket.destport,
-            udppacket.checksum)
+    
+    """String representation of this packet"""
+    def __str__(self):
+        return "flags: %s, sequence %s, ack %s, sourceip:port: %s:%s, destinationip:port: %s:%s" % (self.flags,self.sequence, self.ack, self.sourceip, self.sourceport, self.destinationip, self.destport)
+            
+    '''Serialize packet to bytes'''
+    @staticmethod
+    def serialize(packet):
+        return pickle.dumps(packet)
+    
+    '''deserialize from bytes to object'''
+    @staticmethod
+    def deserialize(packet):
+        return pickle.loads(packet)
     
     # Calculate checksum
     @staticmethod
     def calculate_checksum(packet):
-        pass
+        m = hashlib.md5()
+        # add all the flags to the checksum
+        for flag in packet.flags:
+            m.update(flag.name.encode('utf-8'))
+        if packet.sequence:
+            m.update(str(packet.sequence).encode('utf-8'))
+        if packet.ack:
+            m.update(str(packet.ack).encode('utf-8'))
+        if packet.data:
+            m.update(packet.data.encode('utf-8'))
+        if packet.sourceip:
+            m.update(packet.sourceip.encode('utf-8'))
+        if packet.sourceport:
+            m.update(str(packet.sourceport).encode('utf-8'))
+        if packet.destinationip:
+            m.update(packet.destinationip.encode('utf-8'))
+        if packet.destport:
+            m.update(str(packet.destport).encode('utf-8'))
+        return m.digest()
+        
         
         
