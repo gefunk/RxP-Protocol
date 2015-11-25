@@ -2,11 +2,25 @@ from enum import Enum, unique
 import pickle
 import hashlib
 
+'''
+Class representing the different FLAGS that can be set on a FLAG
+'''
 @unique
 class RxPFlags(Enum):
     SYN = 'SYN'
     ACK = 'ACK'
+    NACK = 'NACK'
+    FIN = 'FIN'
+    DATA = 'DATA'
 
+'''
+Class representing the different states that the packet can be in
+'''
+@unique
+class RxPPacketState(Enum):
+    NOT_SENT = 1
+    SENT_WAITING_FOR_ACK = 2
+    RECEIVED_ACK = 3
 
 
 class RxPacket:
@@ -29,6 +43,11 @@ class RxPacket:
         self.destport = destport
         '''Checksum'''
         self.checksum = checksum
+        '''Current state packet is in'''
+        self.state = RxPPacketState.NOT_SENT
+        '''The time this packet was sent'''
+        self.sent_time = None
+        
     
     """String representation of this packet"""
     def __str__(self):
@@ -56,7 +75,7 @@ class RxPacket:
         if packet.ack:
             m.update(str(packet.ack).encode('utf-8'))
         if packet.data:
-            m.update(packet.data.encode('utf-8'))
+            m.update(packet.data)
         if packet.sourceip:
             m.update(packet.sourceip.encode('utf-8'))
         if packet.sourceport:

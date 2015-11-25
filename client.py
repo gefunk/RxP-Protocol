@@ -26,4 +26,13 @@ class Client:
 
 
 client = Client()
+
 conn = client.connect()
+print ("Sending Data through client")
+conn.send("hello, whats up guy?")
+
+
+data = conn.receive(512)
+print ("Data from Server: "+data)
+    
+
