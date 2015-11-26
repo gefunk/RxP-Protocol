@@ -3,6 +3,7 @@ import time
 from threading import Timer
 from packet import RxPacket
 from packet import RxPFlags
+from select import select
 
 class RxPCommunicator:
     def __init__(self,socket, loglevel=logging.DEBUG):
@@ -31,6 +32,8 @@ class RxPCommunicator:
         self.sock = socket
         # packet sequence
         self.packet_sequence_number = 0
+        # alive status
+        self.ALIVE = True
 
     
     """
@@ -123,10 +126,15 @@ class RxPCommunicator:
     def __get_next_packet_sequence_number(self):
         self.packet_sequence_number += 1
         return self.packet_sequence_number
+        
+    def add_listener(self, key, listener):
+        self.listeners[key] = listener
+        
+    def remove_listener(self, key):
+        del self.listeners[key]
     
     def receive_packet(self):
         data,addr = self.sock.recvfrom(self.BUFFER_SIZE)
-        self.logger.debug("Data in bytes: %s" % RxPacket.deserialize(data))
         packet = RxPacket.deserialize(data)
         self.logger.debug("Received packet: %s" % str(packet))
         '''Check if we have a non corrupt packet'''
@@ -138,7 +146,7 @@ class RxPCommunicator:
         if RxPFlags.ACK in packet.flags:
             self.logger.debug("Waiting To be acked going to remove %s, these are the current keys: %s" % (packet.ack, self.waiting_to_be_acked.keys()))
             del self.waiting_to_be_acked[packet.ack]
-
+        
         return packet
     
     '''Send packet to destination'''
@@ -153,10 +161,12 @@ class RxPCommunicator:
             # if the RETRY Thread is not running, kick it off
             if not self.RETRY_THREAD:
                 t = Timer(self.RETRY_DELAY, self.resend_unacked_packets)
+                t.setDaemon(True)
                 t.start()
                 self.RETRY_THREAD = True
         # Send packet over UDP
         self.sock.sendto(RxPacket.serialize(packet), (packet.destinationip, packet.destport))
+        self.logger.debug("Sent Packet, returning to calling function")
     
     # Check every time period to see if there are unacked packets to be sent
     def resend_unacked_packets(self):
@@ -170,6 +180,7 @@ class RxPCommunicator:
                     self.send_packet(self.waiting_to_be_acked[unacked_packet])
             # tell the retry thread to try again after delay, we have to keep retrying till the acked packets are done
             t = Timer(self.RETRY_DELAY, self.resend_unacked_packets)
+            t.setDaemon(True)
             t.start()
             self.RETRY_THREAD = True
         else:

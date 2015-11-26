@@ -5,6 +5,7 @@ from connection import RxPConnection
 from connection import RxPConnectionState
 from communicator import RxPCommunicator
 from packet import RxPFlags
+from threading import Thread
 
 class RxP:
     def __init__(self, loglevel=logging.DEBUG):
@@ -23,13 +24,11 @@ class RxP:
         self.logger.addHandler(ch)
         # all the connections that are still waiting to establish
         self.initiating_connections = {}
-        # established connections
-        self.connections = {}
         # Initialize underlying implementation socket to UDP socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Initialize RxP communication class
         self.communicator = RxPCommunicator(self.sock, loglevel)
-        
+
     
     '''Start listening for incoming packets'''
     def listen(self, ip, port):
@@ -47,6 +46,7 @@ class RxP:
             self.logger.debug("Accept - waiting for packet to arrive")
             # wait for a packet to arrive
             packet = self.communicator.receive_packet()
+            self.logger.debug("Accept: Got packet: %s " % packet)
             if packet:
                 connection_key = packet.sourceip+":"+str(packet.sourceport)
                 ''' Client request to connect '''
@@ -60,14 +60,14 @@ class RxP:
                     Check if an incoming ACK's is for connection establishment
                     if it is then we will break and return an established connection
                     """
-                    self.connections[connection_key] = self.initiating_connections[packet.sourceip+":"+str(packet.sourceport)]
+                    connection = self.initiating_connections[packet.sourceip+":"+str(packet.sourceport)]
                     # start the connection process
-                    self.connections[connection_key].start()
+                    connection.start()
                     # remove from the list of connections waiting to be established
                     del self.initiating_connections[connection_key]
                     # break out of loop and return connection
                     self.logger.debug("End Accept Returning Connection to Server")
-                    return self.connections[connection_key]
+                    return connection
     
     
     
