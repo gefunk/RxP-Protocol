@@ -1,8 +1,7 @@
 from enum import Enum, unique
 import logging
 from packet import RxPacket,RxPFlags
-from threading import Timer
-from multiprocessing import Process
+from threading import Timer, Thread
 import traceback
 
 """ Enum representing the different states a connection can be in"""
@@ -17,11 +16,19 @@ class RxPConnectionState(Enum):
     LAST_ACK=8
     CLOSED=5
 
+class RxPConnectionSendException(Exception):
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
 """Represents an active connection - a virtual circuit"""
-class RxPConnection(Process):
-    def __init__(self, sourceip, sourceport, destinationip, destinationport, sequence, ack, communicator, loglevel=logging.DEBUG, window_size=1):
+class RxPConnection(Thread):
+    def __init__(self, name, sourceip, sourceport, destinationip, destinationport, sequence, ack, communicator, loglevel=logging.DEBUG, window_size=1):
         # Initialize Super class
         super().__init__()
+        # set the name of this process
+        self.name = name
         # Initialize Logger
         self.logger = logging.getLogger("RxPConnection")
         self.loglevel = loglevel
@@ -48,10 +55,9 @@ class RxPConnection(Process):
         self.last_seq = sequence
         '''Last Acknowledgement number'''
         self.last_ack = ack
-        self.window_size = window_size
-        self.send_window = []
-        for i in range(0, self.window_size):
-            self.send_window.append(None)
+        '''Set Window Size'''
+        self.set_window_size(window_size)
+        self.logger.debug("Initialzied Send Window to Window Size: %s" % self.send_window)
         self.send_window_data = {}
         self.communicator = communicator
         # Timeouts for the different states during close
@@ -71,14 +77,13 @@ class RxPConnection(Process):
     and to start off the connection in a separate process
     """
     def run(self):
-        self.logger.debug("Started Connection Process")
-        print (traceback.extract_stack())
+        self.logger.debug("Started Connection Process: %s" % self.name)
         self.state = (RxPConnectionState.ESTABLISHED)
         while True:
             packet = self.communicator.receive_packet()
             # If it is an ACK packet then remove the acknowledged packet from the send window
             if RxPFlags.ACK in packet.flags:
-                self.__remove_acked_from_send_window(packet.ack)
+                self.__handle_ack_packet(packet)
             elif RxPFlags.DATA in packet.flags:
                 self.logger.debug("Received DATA in connection %s" % packet.sequence)
                 # append received 
@@ -86,7 +91,27 @@ class RxPConnection(Process):
                 self.logger.debug("Receive Buffer Size : %s" % len(self.receive_buffer))
                 # send ACKnowledgement
                 self.communicator.sendACK(self.sourceport, self.sourceip, packet)
-    
+
+    def __handle_ack_packet(self, packet):
+        if self.state == RxPConnectionState.ESTABLISHED:
+            self.__remove_acked_from_send_window(packet.ack)
+        elif self.state == RxPConnectionState.FIN_WAIT_1:
+            pass
+
+    def __handle_fin_received(self, packet):
+        self.logger.debug("Recieved FIN")
+        # Check if we are in the Active close flow in FIN_WAIT_1
+        if self.state == RxPConnectionState.FIN_WAIT_1:
+            self.communicator.sendACK(self.sourceport, self.sourceip, packet)
+            self.state == RxPConnectionState.CLOSING
+            t = Timer(self.CLOSING_TIMEOUT, self.__handle_close_timeouts, [self.state, sequence_number])
+            t.start()
+        elif self.state == RxPConnectionState.ESTABLISHED:
+            self.communicator.sendACK(self.sourceport, self.sourceip, packet)
+            # we are going to the passive close flow
+            self.state = RxPConnectionState.CLOSE_WAIT
+            self.close()
+
     """
     Read data from the connection buffer
     """            
@@ -94,92 +119,87 @@ class RxPConnection(Process):
         data_to_return = None
         while data_to_return is None:
             if len(self.receive_buffer) > 0:
-                self.logger.debug("Should be sending back to user")
+                self.logger.debug("Should be sending back to user data: %s" % self.receive_buffer)
+                data_to_return = self.receive_buffer[0:buffer_size]
                 if len(self.receive_buffer) > buffer_size:
                     self.receive_buffer = self.receive_buffer[buffer_size:]
                 else:
                     self.receive_buffer = bytearray()
-                data_to_return = self.receive_buffer[0:buffer_size]
         return data_to_return
     
     """Send data to the other side"""
     def send(self, command, data=None):
-        command_bytes = bytearray(command, 'utf-8')
-        self.data_to_be_sent = command_bytes
-        self.data_to_be_sent_last_pointer = 0
-        # append data to command if not null
-        if data:
-            self.data_to_be_sent += data
-        self.__fill_send_window()
+        try:
+            if self.state is not RxPConnectionState.ESTABLISHED:
+                raise RxPConnectionSendException("Connection state is not established it is: "+self.state)
+            command_bytes = bytearray(command, 'utf-8')
+            self.data_to_be_sent = command_bytes
+            self.data_to_be_sent_last_pointer = 0
+            # append data to command if not null
+            if data:
+                self.data_to_be_sent += data
+            self.__fill_send_window()
+        except RxPConnectionSendException as e: 
+            self.logger.error("Connection Send exception", e.value)
             
         
     """Remove ack'ed packets from send window"""    
     def __remove_acked_from_send_window(self, sequence):
-        for index, packet_sequence in self.send_window:
+        self.logger.debug("Removing ACK'ed from Send window: %s " % self.send_window)
+        for index, packet_sequence in enumerate(self.send_window):
             if packet_sequence == sequence:
                 self.logger.debug("Removing from Send Window Packet with Sequence: %s" % packet_sequence)
                 self.send_window[index] = None
-        # move the send window to make space for additional packets
-        self.__advance_send_window(0)
         # fill the window with additional packets
         self.__fill_send_window()
         
-    """Advance the send window"""
-    def __advance_send_window(self, index):
-        # remove all preceding empty spaces from the send window 
-        if index < self.window_size and self.send_window[index] == None:
-            del self.send_window[index]
-            self.__advance_send_window[index+1]
-        self.logger.debug("Advanced Send Window to: %s" % str(self.send_window))
-            
+           
     """Fill empty slots in the send window with additional packets"""
     def __fill_send_window(self):
-        for window_slot in range(0, self.window_size):
+        for window_slot, value in enumerate(self.send_window):
             if self.send_window[window_slot] == None:
                 data_in_bytes = self.__get_next_datagram()
-                # send the packet, and record the sequence number in the send window
-                packet_sequence = self.communicator.sendDATA(self.sourceip, self.sourceport, self.destinationip, self.destinationport, data_in_bytes)
-                self.logger.debug("Fill Send Window Slot: %s Sent Packet with Sequence: %s" % (window_slot,packet_sequence))
-                self.send_window[window_slot] = packet_sequence
+                if data_in_bytes:
+                    # send the packet, and record the sequence number in the send window
+                    packet_sequence = self.communicator.sendDATA(self.sourceip, self.sourceport, self.destinationip, self.destinationport, data_in_bytes)
+                    self.logger.debug("Fill Send Window Slot: %s Sent Packet with Sequence: %s and data: %s" % (window_slot,packet_sequence, data_in_bytes))
+                    self.send_window[window_slot] = packet_sequence
+                else:
+                    self.logger.debug("No More data to send")
         self.logger.debug("Filled Send Window to: %s" % str(self.send_window))
     
     """Split data to send into buffer size byte data grams"""
     def __get_next_datagram(self):
         data_in_bytes = None
-        if self.data_to_be_sent and self.data_to_be_sent_last_pointer <= (len(self.data_to_be_sent)):
-            data_buffer_width = self.data_to_be_sent_last_pointer + self.send_buffer_size;
-            if data_buffer_width >= (len(self.data_to_be_sent)):
-                data_buffer_width = len(self.data_to_be_sent)
-            data_in_bytes = self.data_to_be_sent[self.data_to_be_sent_last_pointer+1 : data_buffer_width]
+        self.logger.debug("Data To be Sent Last Pointer: %s, Length of Data: %s" % (self.data_to_be_sent_last_pointer, len(self.data_to_be_sent)))
+        if self.data_to_be_sent_last_pointer < len(self.data_to_be_sent):
+            end_index = self.data_to_be_sent_last_pointer+self.send_buffer_size
+            self.logger.debug("End Index: %s " % end_index)
+            data_in_bytes = self.data_to_be_sent[self.data_to_be_sent_last_pointer : end_index]
+            self.logger.debug("Data in bytes: %s, Data Indices: [%s : %s]" % (data_in_bytes, self.data_to_be_sent_last_pointer, end_index))
+            # advance data pointer to next point in data stream
+            self.data_to_be_sent_last_pointer = end_index
         return data_in_bytes
     
         
     """Close the connection"""
     def close(self):
-        self.logger.debug("Sending FIN packet to close connection")
-        sequence_number = self.sendCONNECTFIN(self, sourceip, sourceport, destinationip, destport)
-        # First check if we are in the passive close flow
-        if self.state == RxPConnectionState.CLOSE_WAIT:
-            self.state = RxPConnectionState.LAST_ACK
-            t = Timer(self.LAST_ACK_TIMEOUT, self.handle_close_timeouts, [self.state, sequence_number])
-            t.start()
-        else:
-            # Otherwise we are going to do the Active Close Flow
+        # Check if we are in established, if we are send FIN
+        if self.state == RxPConnectionState.ESTABLISHED:
+            self.logger.debug("Sending FIN packet to close connection")
+            sequence_number = self.communicator.sendCONNECTFIN(self.sourceip, self.sourceport, self.destinationip, self.destinationport)
             self.state = RxPConnectionState.FIN_WAIT_1
-            t = Timer(self.FIN_WAIT_1_TIMEOUT, self.handle_close_timeouts, [self.state, sequence_number])
+            t = Timer(self.FIN_WAIT_1_TIMEOUT, self.__handle_close_timeouts, [self.state, sequence_number])
+            t.start()
+        # First check if we are in the passive close flow
+        elif self.state == RxPConnectionState.CLOSE_WAIT:
+            self.logger.debug("Sending FIN packet to close connection")
+            sequence_number = self.communicator.sendCONNECTFIN(self.sourceip, self.sourceport, self.destinationip, self.destinationport)
+            self.state = RxPConnectionState.LAST_ACK
+            t = Timer(self.LAST_ACK_TIMEOUT, self.__handle_close_timeouts, [self.state, sequence_number])
             t.start()
         
-    def fin_received(self, packet):
-        self.logger.debug("Recieved FIN")
-        # ACK the FIN
-        self.communicator.sendCONNECTACK(self.port, self.ip, packet)
-        # Check if we are in the Active close flow in FIN_WAIT_1
-        if self.state == RxPConnectionState.FIN_WAIT_1:
-            self.state == RxPConnectionState.CLOSING
-        else:
-            # we are going to the passive close flow
-            self.state = RxPConnectionState.CLOSE_WAIT
-            self.close()
+
         
     # destroy any resources with this connection    
     def destroy(self):
@@ -188,12 +208,20 @@ class RxPConnection(Process):
             
     
     """Function to handle any close state timeouts"""
-    def handle_close_timeouts(self, state, sequence):
-        if self.communicator.waiting_to_be_acked[sequence] and self.state == state:
+    def __handle_close_timeouts(self, state, sequence=None):
+        # If the state has changed since we were waiting for an ACK
+        # ANd we are still not waiting for the FIN packet to be ACk'ed
+        if sequence and sequence not in self.communicator.waiting_to_be_acked and self.state is not state:
+            return None
+        else:
             self.logger.debug("Close timeout in State: %s for Packet Sequence: %s", (state, sequence))
             self.state = RxPConnectionState.CLOSED
             self.destroy()
             
-        
-    
+    """Set the Send Window Size"""
+    def set_window_size(self, window_size):
+        self.window_size = window_size
+        self.send_window = []
+        for i in range(0, self.window_size):
+            self.send_window.append(None)
     

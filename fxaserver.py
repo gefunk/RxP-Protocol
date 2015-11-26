@@ -8,7 +8,7 @@ from threading import Thread
 class Server(Thread):
     def __init__(self, port, loglevel=logging.DEBUG):
         super(Server, self).__init__()
-        self.logger = logging.getLogger("RxPConnection")
+        self.logger = logging.getLogger("RxPServer")
         self.loglevel = loglevel
         # create console handler and set level to debug
         self.logger.setLevel(loglevel)
@@ -29,11 +29,11 @@ class Server(Thread):
     def handle_client(self,connection):
         while True:
             data = connection.receive(512)
-            self.logger.debug("Data Recieved from Client: %s " % data)
+            self.logger.info("Data Recieved from Client: %s " % data)
             connection.send("I got you, SON!")
     
     def run(self):
-        socket = RxP()
+        socket = RxP(self.loglevel)
         socket.listen("127.0.0.1", self.port)
         while self.SHOULD_I_RUN:
             connection = socket.accept()
@@ -49,7 +49,7 @@ class Server(Thread):
 
 
 if __name__ == '__main__':
-    server = Server(52001)
+    server = Server(52001, logging.DEBUG)
     server.start()
 
 

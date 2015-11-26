@@ -18,21 +18,22 @@ class Client:
         self.logger.addHandler(ch)
     
     def connect(self):
-        socket = RxP()
+        socket = RxP(self.loglevel)
         conn = socket.connect("127.0.0.1", 52000, "127.0.0.1", 52001)
         self.logger.debug("Connection Established, %s" % conn)
         return conn
 
 
 
-client = Client()
+client = Client(logging.INFO)
 
 conn = client.connect()
-print ("Sending Data through client")
+client.window_size = 2
 conn.send("hello, whats up guy?")
 
 
-data = conn.receive(512)
-print ("Data from Server: "+data)
+while True:
+    data = conn.receive(512)
+    print ("Data from Server: "+str(data))
     
 

@@ -53,7 +53,7 @@ class RxP:
                 self.logger.debug("Initiating Connections: %s" % (self.initiating_connections.keys()))
                 if RxPFlags.SYN in packet.flags:
                     # add client to possible connections list
-                    self.initiating_connections[connection_key] = RxPConnection(self.ip, self.port, packet.sourceip, packet.sourceport, 0, None, self.communicator)
+                    self.initiating_connections[connection_key] = RxPConnection("Connection to: "+connection_key,self.ip, self.port, packet.sourceip, packet.sourceport, 0, None, self.communicator, self.loglevel)
                     self.communicator.sendCONNECTSYNACK(self.ip, self.port, packet)
                 elif connection_key in self.initiating_connections and RxPFlags.ACK in packet.flags:
                     """
@@ -84,8 +84,9 @@ class RxP:
            if packet.destinationip == sourceip and packet.destport == sourceport and RxPFlags.ACK in packet.flags:
                # Send acknowledgement to the client
                self.communicator.sendACK(sourceport, sourceip, packet)
+               connection_key = packet.sourceip+":"+str(packet.sourceport)
                # set the connection to established and return
-               connection = RxPConnection(sourceip, sourceport, packet.sourceip, packet.sourceport, 0, None, self.communicator)
+               connection = RxPConnection("Connection to: "+connection_key,sourceip, sourceport, packet.sourceip, packet.sourceport, 0, None, self.communicator, self.loglevel)
                # start the connection process
                connection.start()
                connection.window_size = window_size
